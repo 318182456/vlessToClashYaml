@@ -1,4 +1,21 @@
 const http = require('http');
+const dns = require('dns').promises;
+
+// 判断是否为 IPv4 地址
+function isIPv4(str) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(str);
+}
+
+// 域名解析为 IP，失败则返回原值
+async function resolveServer(server) {
+  if (isIPv4(server)) return server;
+  try {
+    const { address } = await dns.lookup(server, { family: 4 });
+    return address;
+  } catch {
+    return server;
+  }
+}
 
 function decodeBase64(str) {
   try {
@@ -251,6 +268,11 @@ module.exports = async function handler(req, res) {
     if (proxies.length === 0) {
       return res.status(200).send('proxies: []\n');
     }
+
+    // 并行将所有域名 server 解析为 IP
+    await Promise.all(proxies.map(async p => {
+      p.server = await resolveServer(p.server);
+    }));
 
     // 手动拼接 YAML，完全掌控格式，避免 yaml 库输出 Mihomo 不兼容的格式
     const yamlStr = 'proxies:\n' + proxies.map(proxyToYaml).join('\n') + '\n';
