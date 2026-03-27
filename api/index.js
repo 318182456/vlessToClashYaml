@@ -12,9 +12,19 @@ function decodeBase64(str) {
   }
 }
 
+function sanitizeName(name) {
+  // Remove newlines and trim
+  let n = name.replace(/[\r\n]+/g, ' ').trim();
+  // Remove or replace characters that often break YAML if not quoted properly
+  // Though we will force quoting, let's also remove colons just in case to be super safe
+  n = n.replace(/:/g, '-');
+  n = n.replace(/[\[\]\{\}]/g, '');
+  return n;
+}
+
 function parseVless(uriStr) {
   const url = new URL(uriStr);
-  const name = decodeURIComponent(url.hash.substring(1) || 'VLESS-Node');
+  const name = sanitizeName(decodeURIComponent(url.hash.substring(1) || 'VLESS-Node'));
   
   const proxy = {
     name: name,
@@ -82,7 +92,7 @@ function parseVmess(uriStr) {
     return null;
   }
 
-  const name = config.ps || 'VMess-Node';
+  const name = sanitizeName(config.ps || 'VMess-Node');
   
   const proxy = {
     name: name,
@@ -119,7 +129,7 @@ function parseVmess(uriStr) {
 
 function parseTrojan(uriStr) {
   const url = new URL(uriStr);
-  const name = decodeURIComponent(url.hash.substring(1) || 'Trojan-Node');
+  const name = sanitizeName(decodeURIComponent(url.hash.substring(1) || 'Trojan-Node'));
   
   const proxy = {
     name: name,
@@ -211,10 +221,16 @@ module.exports = async function handler(req, res) {
       return res.status(200).send('proxies: []');
     }
 
-    const config = { proxies };
-
-    // Use a safer stringify or at least ensure we don't have weirdness
-    const yamlStr = yaml.stringify(config);
+    const doc = new yaml.Document();
+    doc.contents = { proxies };
+    
+    // Force specific formatting to avoid Mihomo parsing issues
+    const yamlStr = doc.toString({
+      collectionStyle: 'block',
+      indent: 2,
+      defaultKeyType: 'PLAIN',
+      defaultScalarType: 'PLAIN'
+    });
 
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate'); 
