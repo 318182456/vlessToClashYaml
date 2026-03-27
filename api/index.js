@@ -2,7 +2,8 @@ const http = require('http');
 
 function decodeBase64(str) {
   try {
-    if (str.includes('://') || str.includes('proxies:')) {
+    // 仅当字符串明确是 vless/vmess/trojan 链接或已是 YAML proxies 列表时跳过解码
+    if (str.startsWith('vless://') || str.startsWith('vmess://') || str.startsWith('trojan://') || str.startsWith('proxies:')) {
       return str;
     }
     return Buffer.from(str, 'base64').toString('utf-8');
@@ -211,7 +212,9 @@ module.exports = async function handler(req, res) {
 
   try {
     const response = await fetch(url, {
-      headers: { 'User-Agent': 'ClashforWindows/0.19.23' }
+      // 使用 v2rayN UA，让 3x-ui 返回 base64 VLESS 格式，而非 Clash YAML
+      // Clash UA 会导致 3x-ui 返回其自生成的 YAML（short-id 可能不同且格式有误）
+      headers: { 'User-Agent': 'v2rayN/6.23' }
     });
 
     if (!response.ok) {
