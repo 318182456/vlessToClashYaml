@@ -33,6 +33,7 @@ function proxyToYaml(p) {
   }
   lines.push(`    network: ${p.network}`);
   lines.push(`    tls: ${p.tls}`);
+  if (p.flow) lines.push(`    flow: ${p.flow}`);
   lines.push(`    udp: ${p.udp}`);
   if (p.sni) lines.push(`    sni: ${p.sni}`);
   if (p['client-fingerprint']) lines.push(`    client-fingerprint: ${p['client-fingerprint']}`);
@@ -55,7 +56,7 @@ function proxyToYaml(p) {
   if (p['reality-opts']) {
     lines.push(`    reality-opts:`);
     lines.push(`      public-key: ${p['reality-opts']['public-key']}`);
-    lines.push(`      short-id: ${p['reality-opts']['short-id']}`);
+    lines.push(`      short-id: "${p['reality-opts']['short-id']}"`);
   }
   if (p['http-opts']) {
     lines.push(`    http-opts:`);
@@ -94,6 +95,9 @@ function parseVless(uriStr) {
 
   const alpn = url.searchParams.get('alpn');
   if (alpn) proxy.alpn = alpn.split(',');
+
+  const flow = url.searchParams.get('flow');
+  if (flow) proxy.flow = flow;
 
   if (url.searchParams.get('security') === 'reality') {
     proxy['reality-opts'] = {
