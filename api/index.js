@@ -2,6 +2,10 @@ const yaml = require('yaml');
 
 function decodeBase64(str) {
   try {
+    // If it's already a link list or YAML, don't decode
+    if (str.includes('://') || str.includes('proxies:')) {
+      return str;
+    }
     return Buffer.from(str, 'base64').toString('utf-8');
   } catch (e) {
     return str;
@@ -157,7 +161,8 @@ module.exports = async function handler(req, res) {
   const { url } = req.query;
 
   if (!url) {
-    return res.status(400).json({ error: 'Missing "url" parameter' });
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    return res.status(200).send('# Missing "url" parameter\nproxies: []');
   }
 
   try {
@@ -201,17 +206,22 @@ module.exports = async function handler(req, res) {
     }
 
     if (proxies.length === 0) {
-      return res.status(400).json({ error: 'No meaningful proxies found. Original response size: ' + text.length });
+      // Return a valid but empty YAML instead of a JSON error to prevent Mihomo parsing issues
+      res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+      return res.status(200).send('proxies: []');
     }
 
     const config = { proxies };
 
+    // Use a safer stringify or at least ensure we don't have weirdness
     const yamlStr = yaml.stringify(config);
 
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate'); // cache on Vercel edge for 10 min
+    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate'); 
     res.status(200).send(yamlStr);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // If we hit an error, return it as a YAML comment to avoid parsing errors in Mihomo
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.status(200).send(`# Error fetching subscription: ${err.message}\nproxies: []`);
   }
 }
