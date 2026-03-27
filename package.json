@@ -1,0 +1,11 @@
+{
+  "name": "3x-ui-to-mihomo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
+  }
+}
