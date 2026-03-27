@@ -221,23 +221,19 @@ module.exports = async function handler(req, res) {
       return res.status(200).send('proxies: []');
     }
 
-    const doc = new yaml.Document();
-    doc.contents = { proxies };
-    
-    // Force specific formatting to avoid Mihomo parsing issues
-    const yamlStr = doc.toString({
-      collectionStyle: 'block',
-      indent: 2,
-      defaultKeyType: 'PLAIN',
-      defaultScalarType: 'PLAIN'
-    });
+    // Switch to JSON for maximum robustness. JSON is valid YAML.
+    // This removes any ambiguity regarding indentation or special char quoting.
+    const output = JSON.stringify({ proxies }, null, 2);
 
-    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate'); 
-    res.status(200).send(yamlStr);
+    res.status(200).send(output);
   } catch (err) {
-    // If we hit an error, return it as a YAML comment to avoid parsing errors in Mihomo
-    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-    res.status(200).send(`# Error fetching subscription: ${err.message}\nproxies: []`);
+    // Return error as a JSON object that is still technically valid YAML
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).send(JSON.stringify({ 
+      error: err.message,
+      proxies: []
+    }, null, 2));
   }
 }
