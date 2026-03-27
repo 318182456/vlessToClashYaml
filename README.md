@@ -8,13 +8,7 @@
 本工具在后台请求 3x-ui 数据时，会自动携带类似于 Clash 的 `User-Agent`，确保 3x-ui 总是返回正确的 Base64 订阅文本。接着，将解析各类节点 URI 为适合 Mihomo 规范的配置。
 
 ## 部署到 Vercel (一键部署)
-如果您已安装 Vercel CLI：
-1. 打开终端并进入本项目目录 `d:\test\318182456\vlessToClashYaml`
-2. 运行 `vercel login` 并登录
-3. 运行 `vercel` 命令，跟随提示即可完成部署 (选择默认设置即可)
-4. 将应用部署到线上生产环境：`vercel --prod`
-
-或者，只需将此目录推送到 GitHub 并在 Vercel 面板中导入该仓库即可自动部署。
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/318182456/vlessToClashYaml&project-name=vlessToClashYaml&repository-name=vlessToClashYaml)
 
 ## 使用方法
 项目部署成功后，假设 Vercel 为您分配的域名为 `https://your-vercel-domain.vercel.app`。
