@@ -217,8 +217,110 @@ function parseTrojan(uriStr) {
   return proxy;
 }
 
+// 动态获取并解析 INI 文件内容
+async function fetchAndParseIni(nodeNames, iniUrl) {
+  try {
+    const response = await fetch(iniUrl);
+    if (!response.ok) throw new Error('Failed to fetch INI');
+    const text = await response.text();
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith(';'));
+
+    const proxyGroups = [];
+    const ruleProviders = {};
+    const rules = [];
+
+    for (const line of lines) {
+      if (line.startsWith('custom_proxy_group=')) {
+        const parts = line.substring('custom_proxy_group='.length).split('\`');
+        const name = parts[0];
+        const type = parts[1] || 'select';
+        const proxies = [];
+
+        for (let i = 2; i < parts.length; i++) {
+          let member = parts[i];
+          if (!member) continue;
+          if (member.startsWith('[]')) {
+            proxies.push(member.substring(2));
+          } else if (member.startsWith('!!')) {
+            // 简单处理排除项（暂不支持复杂正则排除）
+          } else {
+            try {
+              const regex = new RegExp(member);
+              const matched = nodeNames.filter(n => regex.test(n));
+              if (matched.length > 0) proxies.push(...matched);
+            } catch(e) { /* fallback */ }
+          }
+        }
+        proxyGroups.push({ name, type, proxies: [...new Set(proxies)] });
+      } else if (line.startsWith('ruleset=')) {
+        const val = line.substring('ruleset='.length);
+        const firstComma = val.indexOf(',');
+        if (firstComma === -1) continue;
+        const groupName = val.substring(0, firstComma);
+        const ruleData = val.substring(firstComma + 1);
+
+        if (ruleData.startsWith('[]')) {
+          const content = ruleData.substring(2);
+          if (content === 'FINAL') {
+            rules.push(`  - MATCH,${groupName}`);
+          } else {
+            const ruleTypeParts = content.split(',');
+            rules.push(`  - ${ruleTypeParts[0]},${ruleTypeParts[1]},${groupName}`);
+          }
+        } else {
+          const url = ruleData;
+          let providerNameOriginal = url.split('/').pop().replace('.list', '').replace(/[^a-zA-Z0-9_\-]/g, '');
+          let providerName = providerNameOriginal;
+          let counter = 1;
+          while (ruleProviders[providerName] && ruleProviders[providerName].url !== url) {
+            providerName = providerNameOriginal + counter;
+            counter++;
+          }
+          ruleProviders[providerName] = {
+            type: 'http',
+            behavior: 'classical',
+            url: url,
+            path: `./ruleset/${providerName}.yaml`,
+            interval: 86400
+          };
+          rules.push(`  - RULE-SET,${providerName},${groupName}`);
+        }
+      }
+    }
+
+    let pgYaml = 'proxy-groups:\n';
+    for (const g of proxyGroups) {
+      pgYaml += `  - name: ${g.name}\n`;
+      pgYaml += `    type: ${g.type}\n`;
+      pgYaml += `    proxies:\n`;
+      for (const p of g.proxies) {
+        pgYaml += `      - "${p.replace(/"/g, "'")}"\n`;
+      }
+    }
+
+    let rpYaml = 'rule-providers:\n';
+    for (const [name, p] of Object.entries(ruleProviders)) {
+      rpYaml += `  ${name}:\n`;
+      rpYaml += `    type: ${p.type}\n`;
+      rpYaml += `    behavior: ${p.behavior}\n`;
+      rpYaml += `    url: "${p.url}"\n`;
+      rpYaml += `    path: ${p.path}\n`;
+      rpYaml += `    interval: ${p.interval}\n`;
+    }
+
+    let rYaml = 'rules:\n';
+    for (const r of rules) {
+      rYaml += `${r}\n`;
+    }
+
+    return { proxyGroups: pgYaml, ruleProviders: rpYaml, rules: rYaml };
+  } catch(e) {
+    return null;
+  }
+}
+
 module.exports = async function handler(req, res) {
-  const { url } = req.query;
+  const { url, ini } = req.query;
 
   res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
@@ -274,10 +376,45 @@ module.exports = async function handler(req, res) {
       p.server = await resolveServer(p.server);
     }));
 
-    // 手动拼接 YAML，完全掌控格式，避免 yaml 库输出 Mihomo 不兼容的格式
-    const yamlStr = 'proxies:\n' + proxies.map(proxyToYaml).join('\n') + '\n';
+    // ====== 动态解析 INI 获取规则/策略组 ======
+    const nodeNames = proxies.map(p => p.name);
+    const iniUrl = ini || 'https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_NoAuto.ini';
+    const parsedConfig = await fetchAndParseIni(nodeNames, iniUrl);
+    const proxiesYaml = 'proxies:\n' + proxies.map(proxyToYaml).join('\n') + '\n';
 
-    res.status(200).send(yamlStr);
+    if (!parsedConfig) {
+      // 若获取或者解析失败，回退到只生成 proxies
+      return res.status(200).send(proxiesYaml);
+    }
+
+    // 基础配置
+    const baseConfig = `
+mode: rule
+log-level: info
+allow-lan: true
+external-controller: :9090
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 114.114.114.114
+    - 223.5.5.5
+    - 8.8.8.8
+    - 1.1.1.1
+`;
+
+    // 拼接并返回完整 YAML
+    const finalYaml = [
+      baseConfig.trim(),
+      proxiesYaml.trim(),
+      parsedConfig.proxyGroups.trim(),
+      parsedConfig.ruleProviders.trim(),
+      parsedConfig.rules.trim()
+    ].join('\n\n') + '\n';
+
+    res.status(200).send(finalYaml);
   } catch (err) {
     res.status(200).send('proxies: []\n');
   }
