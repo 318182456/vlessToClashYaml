@@ -216,24 +216,18 @@ module.exports = async function handler(req, res) {
     }
 
     if (proxies.length === 0) {
-      // Return a valid but empty YAML instead of a JSON error to prevent Mihomo parsing issues
       res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-      return res.status(200).send('proxies: []');
+      return res.status(200).send('proxies: []\n');
     }
 
-    // Switch to JSON for maximum robustness. JSON is valid YAML.
-    // This removes any ambiguity regarding indentation or special char quoting.
-    const output = JSON.stringify({ proxies }, null, 2);
+    // 输出标准 YAML，Mihomo proxy-providers 兼容格式
+    const yamlStr = yaml.stringify({ proxies });
 
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate'); 
-    res.status(200).send(output);
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
+    res.status(200).send(yamlStr);
   } catch (err) {
-    // Return error as a JSON object that is still technically valid YAML
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).send(JSON.stringify({ 
-      error: err.message,
-      proxies: []
-    }, null, 2));
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.status(200).send(`proxies: []\n# error: ${err.message}\n`);
   }
 }
