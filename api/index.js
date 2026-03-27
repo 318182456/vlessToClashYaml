@@ -1,8 +1,7 @@
-const yaml = require('yaml');
+const http = require('http');
 
 function decodeBase64(str) {
   try {
-    // If it's already a link list or YAML, don't decode
     if (str.includes('://') || str.includes('proxies:')) {
       return str;
     }
@@ -13,21 +12,71 @@ function decodeBase64(str) {
 }
 
 function sanitizeName(name) {
-  // Remove newlines and trim
-  let n = name.replace(/[\r\n]+/g, ' ').trim();
-  // Remove or replace characters that often break YAML if not quoted properly
-  // Though we will force quoting, let's also remove colons just in case to be super safe
-  n = n.replace(/:/g, '-');
-  n = n.replace(/[\[\]\{\}]/g, '');
-  return n;
+  return name.replace(/[\r\n]+/g, ' ').trim();
+}
+
+// 将单个 proxy 对象序列化为 YAML 列表项（手动拼接，避免库的兼容性问题）
+function proxyToYaml(p) {
+  let lines = [];
+  lines.push(`  - name: "${p.name.replace(/"/g, "'")}"`);
+  lines.push(`    type: ${p.type}`);
+  lines.push(`    server: ${p.server}`);
+  lines.push(`    port: ${p.port}`);
+  if (p.type === 'vless') {
+    lines.push(`    uuid: ${p.uuid}`);
+  } else if (p.type === 'vmess') {
+    lines.push(`    uuid: ${p.uuid}`);
+    lines.push(`    alterId: ${p.alterId || 0}`);
+    lines.push(`    cipher: ${p.cipher || 'auto'}`);
+  } else if (p.type === 'trojan') {
+    lines.push(`    password: ${p.password}`);
+  }
+  lines.push(`    network: ${p.network}`);
+  lines.push(`    tls: ${p.tls}`);
+  lines.push(`    udp: ${p.udp}`);
+  if (p.sni) lines.push(`    sni: ${p.sni}`);
+  if (p['client-fingerprint']) lines.push(`    client-fingerprint: ${p['client-fingerprint']}`);
+  if (p.alpn && p.alpn.length > 0) {
+    lines.push(`    alpn:`);
+    p.alpn.forEach(a => lines.push(`      - ${a}`));
+  }
+  if (p['ws-opts']) {
+    lines.push(`    ws-opts:`);
+    lines.push(`      path: "${p['ws-opts'].path || '/'}"`);
+    if (p['ws-opts'].headers && p['ws-opts'].headers.Host) {
+      lines.push(`      headers:`);
+      lines.push(`        Host: ${p['ws-opts'].headers.Host}`);
+    }
+  }
+  if (p['grpc-opts']) {
+    lines.push(`    grpc-opts:`);
+    lines.push(`      grpc-service-name: "${p['grpc-opts']['grpc-service-name'] || ''}"`);
+  }
+  if (p['reality-opts']) {
+    lines.push(`    reality-opts:`);
+    lines.push(`      public-key: ${p['reality-opts']['public-key']}`);
+    lines.push(`      short-id: ${p['reality-opts']['short-id']}`);
+  }
+  if (p['http-opts']) {
+    lines.push(`    http-opts:`);
+    lines.push(`      method: GET`);
+    lines.push(`      path:`);
+    (p['http-opts'].path || ['/']).forEach(pt => lines.push(`        - "${pt}"`));
+    if (p['http-opts'].headers && p['http-opts'].headers.Host) {
+      lines.push(`      headers:`);
+      lines.push(`        Host:`);
+      (p['http-opts'].headers.Host || []).forEach(h => lines.push(`          - ${h}`));
+    }
+  }
+  return lines.join('\n');
 }
 
 function parseVless(uriStr) {
   const url = new URL(uriStr);
   const name = sanitizeName(decodeURIComponent(url.hash.substring(1) || 'VLESS-Node'));
-  
+
   const proxy = {
-    name: name,
+    name,
     type: 'vless',
     server: url.hostname,
     port: parseInt(url.port) || 443,
@@ -46,7 +95,6 @@ function parseVless(uriStr) {
   const alpn = url.searchParams.get('alpn');
   if (alpn) proxy.alpn = alpn.split(',');
 
-  // Reality support
   if (url.searchParams.get('security') === 'reality') {
     proxy['reality-opts'] = {
       'public-key': url.searchParams.get('pbk') || '',
@@ -54,27 +102,20 @@ function parseVless(uriStr) {
     };
   }
 
-  // NetworkOpts
   if (proxy.network === 'ws') {
     proxy['ws-opts'] = {
       path: url.searchParams.get('path') || '/',
-      headers: {
-        Host: url.searchParams.get('host') || sni || url.hostname
-      }
+      headers: { Host: url.searchParams.get('host') || sni || url.hostname }
     };
   } else if (proxy.network === 'grpc') {
-    proxy['grpc-opts'] = {
-      'grpc-service-name': url.searchParams.get('serviceName') || ''
-    };
+    proxy['grpc-opts'] = { 'grpc-service-name': url.searchParams.get('serviceName') || '' };
   } else if (proxy.network === 'tcp') {
-    const type = url.searchParams.get('headerType');
-    if (type === 'http') {
+    const headerType = url.searchParams.get('headerType');
+    if (headerType === 'http') {
       proxy['http-opts'] = {
-        method: "GET",
-        path: [(url.searchParams.get('path') || '/')],
-        headers: {
-          Host: [(url.searchParams.get('host') || sni || url.hostname)]
-        }
+        method: 'GET',
+        path: [url.searchParams.get('path') || '/'],
+        headers: { Host: [url.searchParams.get('host') || sni || url.hostname] }
       };
     }
   }
@@ -84,18 +125,15 @@ function parseVless(uriStr) {
 
 function parseVmess(uriStr) {
   const base64Str = uriStr.replace('vmess://', '');
-  const configStr = decodeBase64(base64Str);
   let config;
   try {
-    config = JSON.parse(configStr);
+    config = JSON.parse(Buffer.from(base64Str, 'base64').toString('utf-8'));
   } catch (e) {
     return null;
   }
 
-  const name = sanitizeName(config.ps || 'VMess-Node');
-  
   const proxy = {
-    name: name,
+    name: sanitizeName(config.ps || 'VMess-Node'),
     type: 'vmess',
     server: config.add || config.host,
     port: parseInt(config.port) || 443,
@@ -114,14 +152,10 @@ function parseVmess(uriStr) {
   if (proxy.network === 'ws') {
     proxy['ws-opts'] = {
       path: config.path || '/',
-      headers: {
-        Host: config.host || config.sni || config.add
-      }
+      headers: { Host: config.host || config.sni || config.add }
     };
   } else if (proxy.network === 'grpc') {
-    proxy['grpc-opts'] = {
-      'grpc-service-name': config.path || ''
-    };
+    proxy['grpc-opts'] = { 'grpc-service-name': config.path || '' };
   }
 
   return proxy;
@@ -130,38 +164,32 @@ function parseVmess(uriStr) {
 function parseTrojan(uriStr) {
   const url = new URL(uriStr);
   const name = sanitizeName(decodeURIComponent(url.hash.substring(1) || 'Trojan-Node'));
-  
+
   const proxy = {
-    name: name,
+    name,
     type: 'trojan',
     server: url.hostname,
     port: parseInt(url.port) || 443,
     password: url.username,
     network: url.searchParams.get('type') || 'tcp',
-    tls: true, // Trojan implies TLS usually
+    tls: true,
     udp: true
   };
 
   const sni = url.searchParams.get('sni');
   if (sni) proxy.sni = sni;
-  
   const fp = url.searchParams.get('fp');
   if (fp) proxy['client-fingerprint'] = fp;
-
   const alpn = url.searchParams.get('alpn');
   if (alpn) proxy.alpn = alpn.split(',');
 
   if (proxy.network === 'ws') {
     proxy['ws-opts'] = {
       path: url.searchParams.get('path') || '/',
-      headers: {
-        Host: url.searchParams.get('host') || sni || url.hostname
-      }
+      headers: { Host: url.searchParams.get('host') || sni || url.hostname }
     };
   } else if (proxy.network === 'grpc') {
-    proxy['grpc-opts'] = {
-      'grpc-service-name': url.searchParams.get('serviceName') || ''
-    };
+    proxy['grpc-opts'] = { 'grpc-service-name': url.searchParams.get('serviceName') || '' };
   }
 
   return proxy;
@@ -170,64 +198,58 @@ function parseTrojan(uriStr) {
 module.exports = async function handler(req, res) {
   const { url } = req.query;
 
+  res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
+
   if (!url) {
-    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-    return res.status(200).send('# Missing "url" parameter\nproxies: []');
+    return res.status(200).send('proxies: []\n');
   }
 
   try {
     const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'ClashforWindows/0.19.23' // Fake a Clash user agent so 3x-ui returns base64 instead of HTML
-      }
+      headers: { 'User-Agent': 'ClashforWindows/0.19.23' }
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch subscription: ${response.statusText}`);
+      return res.status(200).send('proxies: []\n');
     }
 
     const text = await response.text();
     let decodedText = decodeBase64(text.trim());
-    
-    // Safety check: if it looks like HTML, fetching failed to sidestep the browser check
+
     if (decodedText.includes('<html') || text.includes('<html')) {
-      throw new Error('Subscription URL returned an HTML page instead of node links.');
+      return res.status(200).send('proxies: []\n');
     }
 
     const lines = decodedText.split('\n').map(l => l.trim()).filter(l => l);
-    
     const proxies = [];
 
     for (const line of lines) {
       try {
         if (line.startsWith('vless://')) {
-          const proxy = parseVless(line);
-          if (proxy) proxies.push(proxy);
+          const p = parseVless(line);
+          if (p) proxies.push(p);
         } else if (line.startsWith('vmess://')) {
-          const proxy = parseVmess(line);
-          if (proxy) proxies.push(proxy);
+          const p = parseVmess(line);
+          if (p) proxies.push(p);
         } else if (line.startsWith('trojan://')) {
-          const proxy = parseTrojan(line);
-          if (proxy) proxies.push(proxy);
+          const p = parseTrojan(line);
+          if (p) proxies.push(p);
         }
       } catch (e) {
-        console.error('Error parsing line:', line, e.message);
+        // 跳过无法解析的行
       }
     }
 
     if (proxies.length === 0) {
-      res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
       return res.status(200).send('proxies: []\n');
     }
 
-    // 输出标准 YAML，Mihomo proxy-providers 兼容格式
-    const yamlStr = yaml.stringify({ proxies });
+    // 手动拼接 YAML，完全掌控格式，避免 yaml 库输出 Mihomo 不兼容的格式
+    const yamlStr = 'proxies:\n' + proxies.map(proxyToYaml).join('\n') + '\n';
 
-    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
     res.status(200).send(yamlStr);
   } catch (err) {
-    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-    res.status(200).send(`proxies: []\n# error: ${err.message}\n`);
+    res.status(200).send('proxies: []\n');
   }
 }
