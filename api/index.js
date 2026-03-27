@@ -35,7 +35,7 @@ function proxyToYaml(p) {
   lines.push(`    tls: ${p.tls}`);
   if (p.flow) lines.push(`    flow: ${p.flow}`);
   lines.push(`    udp: ${p.udp}`);
-  if (p.sni) lines.push(`    sni: ${p.sni}`);
+  if (p.sni) lines.push(`    servername: ${p.sni}`);
   if (p['client-fingerprint']) lines.push(`    client-fingerprint: ${p['client-fingerprint']}`);
   if (p.alpn && p.alpn.length > 0) {
     lines.push(`    alpn:`);
